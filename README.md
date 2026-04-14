@@ -1,4 +1,5 @@
 # Backtrace
+仅支持Ubuntu/Debian
 一个基于 NextTrace 的多回程线路自动化检查脚本。
 
 ## 功能
