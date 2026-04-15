@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
-# VPS 回程线路检测脚本 v2.5
+# VPS 回程线路检测脚本 v2.8
 # 检测到北京/上海/广州三网回程路由类型
+# 支持 nexttrace / besttrace / mtr / traceroute 多工具降级
 # ============================================================
 
 RED='\033[0;31m'
@@ -13,6 +14,8 @@ PURPLE='\033[0;35m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 BOLD='\033[1m'
+
+TRACE_TOOL=""
 
 # ============================================================
 # 目标节点
@@ -37,13 +40,155 @@ ORDERED_KEYS=(
 )
 
 # ============================================================
+# 海外运营商 ASN 映射
+# ============================================================
+declare -A OVERSEAS_ASN_MAP
+OVERSEAS_ASN_MAP=(
+    # 国际 Tier1 / 大型运营商
+    [174]="Cogent"
+    [1299]="Telia"
+    [2914]="NTT"
+    [3257]="GTT"
+    [3356]="Lumen"
+    [6461]="Zayo"
+    [6762]="Sparkle"
+    [6939]="HE"
+    [701]="Verizon"
+    [7922]="Comcast"
+    [6453]="Tata"
+    [1273]="Vodafone"
+    [5511]="Orange"
+    [3320]="DTAG"
+    [9002]="RETN"
+    [12389]="Rostelecom"
+    # 亚太运营商
+    [3491]="PCCW"
+    [4760]="HKT"
+    [9269]="HKBN"
+    [9304]="HGC"
+    [4637]="Telstra"
+    [7473]="SingTel"
+    [2497]="IIJ"
+    [17676]="SoftBank"
+    [4788]="TMNet"
+    [7713]="Telkom"
+    [23764]="CTGNet"
+    [38001]="NewMedia"
+    [58511]="Anycast"
+    [131477]="Scloud"
+    [55720]="GigsGigs"
+    [906]="DMIT"
+    [54574]="DMIT"
+    # VPS / 云 / CDN
+    [13335]="Cloudflare"
+    [15169]="Google"
+    [16509]="AWS"
+    [14061]="DigitalOcean"
+    [20473]="Vultr"
+    [63949]="Linode"
+    [16276]="OVH"
+    [24940]="Hetzner"
+    [9009]="M247"
+    [25820]="IT7"
+    [36352]="AS-COLOCROSSING"
+    [21859]="Zenlayer"
+    [35916]="Multacom"
+    [46844]="ST"
+    [40065]="CNSERVERS"
+    # 国内出海口 (也可能在海外段出现)
+    [10099]="CUG"
+    [58453]="CMI"
+    [58807]="CMIN2"
+    [4809]="CN2"
+)
+
+# ============================================================
+# 海外运营商 IP 段识别 (常见骨干网 IP 段)
+# ============================================================
+identify_overseas_ip() {
+    local ip="$1"
+
+    # PCCW
+    [[ "$ip" =~ ^63\.218\. || "$ip" =~ ^63\.223\. || "$ip" =~ ^32\.130\. ]]        && echo "PCCW"     && return
+    # NTT
+    [[ "$ip" =~ ^129\.250\. || "$ip" =~ ^128\.241\. ]]                              && echo "NTT"      && return
+    # GTT
+    [[ "$ip" =~ ^213\.200\. || "$ip" =~ ^89\.149\. || "$ip" =~ ^77\.67\. ]]         && echo "GTT"      && return
+    # Telia
+    [[ "$ip" =~ ^62\.115\. || "$ip" =~ ^80\.91\. || "$ip" =~ ^213\.248\. ]]         && echo "Telia"    && return
+    # Cogent
+    [[ "$ip" =~ ^154\.54\. || "$ip" =~ ^66\.28\. || "$ip" =~ ^38\.140\. ]]          && echo "Cogent"   && return
+    # Lumen / Level3
+    [[ "$ip" =~ ^4\.6[89]\. || "$ip" =~ ^4\.7[0-9]\. ]]                             && echo "Lumen"    && return
+    # HE
+    [[ "$ip" =~ ^184\.104\. || "$ip" =~ ^184\.105\. || "$ip" =~ ^100\.100\. ]]      && echo "HE"       && return
+    # Zayo
+    [[ "$ip" =~ ^64\.125\. ]]                                                        && echo "Zayo"     && return
+    # Sparkle
+    [[ "$ip" =~ ^89\.221\. ]]                                                        && echo "Sparkle"  && return
+    # Tata
+    [[ "$ip" =~ ^80\.231\. ]]                                                        && echo "Tata"     && return
+    # HKT
+    [[ "$ip" =~ ^203\.215\. ]]                                                       && echo "HKT"      && return
+    # HKBN
+    [[ "$ip" =~ ^203\.186\. ]]                                                       && echo "HKBN"     && return
+    # HGC
+    [[ "$ip" =~ ^218\.189\. ]]                                                       && echo "HGC"      && return
+    # SingTel
+    [[ "$ip" =~ ^203\.208\. ]]                                                       && echo "SingTel"  && return
+    # IIJ
+    [[ "$ip" =~ ^210\.130\. ]]                                                       && echo "IIJ"      && return
+    # Telstra
+    [[ "$ip" =~ ^202\.84\. ]]                                                        && echo "Telstra"  && return
+    # CTGNet
+    [[ "$ip" =~ ^69\.194\. || "$ip" =~ ^103\.117\.2[0-5]\. ]]                       && echo "CTGNet"   && return
+    # SoftBank
+    [[ "$ip" =~ ^126\.0\. ]]                                                         && echo "SoftBank" && return
+    # RETN
+    [[ "$ip" =~ ^87\.245\. ]]                                                        && echo "RETN"     && return
+    # DTAG
+    [[ "$ip" =~ ^62\.157\. ]]                                                        && echo "DTAG"     && return
+    # Vodafone
+    [[ "$ip" =~ ^212\.43\. ]]                                                        && echo "Vodafone" && return
+    # Orange
+    [[ "$ip" =~ ^193\.251\. ]]                                                       && echo "Orange"   && return
+}
+
+# ============================================================
+# 国内 IP 段判断
+# ============================================================
+is_cn_ip() {
+    local ip="$1"
+    [[ "$ip" =~ ^59\.43\. ]]       && return 0
+    [[ "$ip" =~ ^202\.97\. ]]      && return 0
+    [[ "$ip" =~ ^218\.105\. ]]     && return 0
+    [[ "$ip" =~ ^210\.51\. ]]      && return 0
+    [[ "$ip" =~ ^219\.158\. ]]     && return 0
+    [[ "$ip" =~ ^223\.120\. ]]     && return 0
+    [[ "$ip" =~ ^223\.11[89]\. ]]  && return 0
+    [[ "$ip" =~ ^223\.121\. ]]     && return 0
+    [[ "$ip" =~ ^221\.(17[6-9]|18[0-3])\. ]] && return 0
+    return 1
+}
+
+is_private_ip() {
+    local ip="$1"
+    [[ "$ip" =~ ^10\. ]]          && return 0
+    [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]] && return 0
+    [[ "$ip" =~ ^192\.168\. ]]    && return 0
+    [[ "$ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[0-2][0-7])\. ]] && return 0
+    [[ "$ip" =~ ^127\. ]]         && return 0
+    return 1
+}
+
+# ============================================================
 # Banner
 # ============================================================
 print_banner() {
     clear
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║              VPS 回程线路检测脚本 v2.5                  ║"
+    echo "║              VPS 回程线路检测脚本 v2.8                  ║"
     echo "║          检测三网回程路由 & 线路类型识别                 ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -75,7 +220,86 @@ print_banner() {
 }
 
 # ============================================================
-# 安装依赖
+# 安装 nexttrace
+# ============================================================
+install_nexttrace() {
+    local arch
+    arch=$(uname -m)
+    case $arch in
+        x86_64)  arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        armv7l)  arch="armv7" ;;
+    esac
+
+    local urls=(
+        "https://github.com/nxtrace/NTrace-core/releases/latest/download/nexttrace_linux_${arch}"
+        "https://mirror.ghproxy.com/https://github.com/nxtrace/NTrace-core/releases/latest/download/nexttrace_linux_${arch}"
+        "https://gh-proxy.com/https://github.com/nxtrace/NTrace-core/releases/latest/download/nexttrace_linux_${arch}"
+    )
+
+    for url in "${urls[@]}"; do
+        echo -e "${YELLOW}    尝试: ${url}${NC}"
+        if curl -sL --connect-timeout 10 "$url" -o /usr/local/bin/nexttrace 2>/dev/null; then
+            chmod +x /usr/local/bin/nexttrace
+            if /usr/local/bin/nexttrace --version &>/dev/null; then
+                echo -e "${GREEN}    [✓] nexttrace 安装成功${NC}"
+                return 0
+            fi
+        fi
+    done
+
+    rm -f /usr/local/bin/nexttrace
+    echo -e "${RED}    [✗] nexttrace 所有下载源均失败${NC}"
+    return 1
+}
+
+# ============================================================
+# 安装 besttrace
+# ============================================================
+install_besttrace() {
+    local arch
+    arch=$(uname -m)
+
+    local url=""
+    case $arch in
+        x86_64)  url="https://cdn.ipip.net/17mon/besttrace4linux.zip" ;;
+        aarch64) url="https://cdn.ipip.net/17mon/besttrace4linux_arm.zip" ;;
+    esac
+
+    if [ -z "$url" ]; then
+        echo -e "${RED}    [✗] besttrace 不支持当前架构: ${arch}${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}    下载 besttrace...${NC}"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    if curl -sL --connect-timeout 10 "$url" -o "${tmpdir}/besttrace.zip" 2>/dev/null; then
+        if ! command -v unzip &>/dev/null; then
+            $PKG_INSTALL unzip >/dev/null 2>&1
+        fi
+        if command -v unzip &>/dev/null; then
+            unzip -q "${tmpdir}/besttrace.zip" -d "${tmpdir}/" 2>/dev/null
+            local bt_bin
+            bt_bin=$(find "${tmpdir}" -name "besttrace*" -type f ! -name "*.zip" | head -1)
+            if [ -n "$bt_bin" ]; then
+                cp "$bt_bin" /usr/local/bin/besttrace
+                chmod +x /usr/local/bin/besttrace
+                rm -rf "$tmpdir"
+                echo -e "${GREEN}    [✓] besttrace 安装成功${NC}"
+                return 0
+            fi
+        fi
+    fi
+
+    rm -rf "$tmpdir"
+    echo -e "${RED}    [✗] besttrace 安装失败${NC}"
+    return 1
+}
+
+# ============================================================
+# 安装依赖 & 选择追踪工具
 # ============================================================
 install_dependencies() {
     echo -e "${YELLOW}[*] 检查并安装必要工具...${NC}"
@@ -100,28 +324,53 @@ install_dependencies() {
         $PKG_INSTALL mtr >/dev/null 2>&1
     fi
 
-    if ! command -v nexttrace &>/dev/null; then
-        echo -e "${YELLOW}[*] 安装 nexttrace...${NC}"
-        local arch
-        arch=$(uname -m)
-        case $arch in
-            x86_64)  arch="amd64" ;;
-            aarch64) arch="arm64" ;;
-            armv7l)  arch="armv7" ;;
-        esac
-        local nt_url="https://github.com/nxtrace/NTrace-core/releases/latest/download/nexttrace_linux_${arch}"
-        curl -sL "$nt_url" -o /usr/local/bin/nexttrace 2>/dev/null && \
-        chmod +x /usr/local/bin/nexttrace && \
-        echo -e "${GREEN}[✓] nexttrace 安装成功${NC}" || \
-        echo -e "${RED}[✗] nexttrace 安装失败, 将使用 traceroute${NC}"
-    fi
-
     if ! command -v dig &>/dev/null; then
         echo -e "${YELLOW}[*] 安装 dnsutils...${NC}"
         $PKG_INSTALL dnsutils >/dev/null 2>&1 || $PKG_INSTALL bind-utils >/dev/null 2>&1
     fi
 
-    echo -e "${GREEN}[✓] 工具检查完成${NC}"
+    echo -e "${YELLOW}[*] 选择路由追踪工具...${NC}"
+
+    if command -v nexttrace &>/dev/null && nexttrace --version &>/dev/null; then
+        TRACE_TOOL="nexttrace"
+        echo -e "${GREEN}[✓] 使用 nexttrace${NC}"
+    else
+        echo -e "${YELLOW}[*] 尝试安装 nexttrace...${NC}"
+        if install_nexttrace; then
+            TRACE_TOOL="nexttrace"
+        fi
+    fi
+
+    if [ -z "$TRACE_TOOL" ]; then
+        if command -v besttrace &>/dev/null; then
+            TRACE_TOOL="besttrace"
+            echo -e "${GREEN}[✓] 使用 besttrace${NC}"
+        else
+            echo -e "${YELLOW}[*] 尝试安装 besttrace...${NC}"
+            if install_besttrace; then
+                TRACE_TOOL="besttrace"
+            fi
+        fi
+    fi
+
+    if [ -z "$TRACE_TOOL" ]; then
+        if command -v mtr &>/dev/null; then
+            TRACE_TOOL="mtr"
+            echo -e "${YELLOW}[✓] 使用 mtr${NC}"
+        fi
+    fi
+
+    if [ -z "$TRACE_TOOL" ]; then
+        if command -v traceroute &>/dev/null; then
+            TRACE_TOOL="traceroute"
+            echo -e "${YELLOW}[✓] 使用 traceroute${NC}"
+        else
+            echo -e "${RED}[✗] 无可用追踪工具${NC}"
+            exit 1
+        fi
+    fi
+
+    echo -e "${GREEN}[✓] 工具检查完成 (追踪工具: ${TRACE_TOOL})${NC}"
     echo ""
 }
 
@@ -135,6 +384,9 @@ resolve_host() {
     if [ -z "$ip" ]; then
         ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1}' | head -1)
     fi
+    if [ -z "$ip" ]; then
+        ip=$(host "$host" 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
+    fi
     [ -z "$ip" ] && ip="$host"
     echo "$ip"
 }
@@ -144,24 +396,32 @@ resolve_host() {
 # ============================================================
 get_trace_data() {
     local ip="$1"
-    if command -v nexttrace &>/dev/null; then
-        nexttrace -q 1 -n "$ip" 2>/dev/null
-    else
-        traceroute -n -q 1 -m 30 -w 2 "$ip" 2>/dev/null
-    fi
+    case "$TRACE_TOOL" in
+        nexttrace)
+            nexttrace -q 1 -n "$ip" 2>/dev/null
+            ;;
+        besttrace)
+            besttrace -q 1 -g cn "$ip" 2>/dev/null
+            ;;
+        mtr)
+            mtr -z -r -n -c 1 "$ip" 2>/dev/null
+            ;;
+        traceroute)
+            if traceroute --help 2>&1 | grep -q '\-A'; then
+                traceroute -A -n -q 1 -m 30 -w 2 "$ip" 2>/dev/null
+            else
+                traceroute -n -q 1 -m 30 -w 2 "$ip" 2>/dev/null
+            fi
+            ;;
+    esac
 }
 
 # ============================================================
-# 识别单个 IP 的网络类型
+# 识别国内 IP 标签
 # ============================================================
-identify_ip_tag() {
+identify_cn_tag() {
     local ip="$1"
-
-    # 排除私有地址
-    if [[ "$ip" =~ ^10\. ]] || [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]] || \
-       [[ "$ip" =~ ^192\.168\. ]] || [[ "$ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[0-2][0-7])\. ]]; then
-        return
-    fi
+    is_private_ip "$ip" && return
 
     [[ "$ip" =~ ^59\.43\. ]]                                                        && echo "CN2"    && return
     [[ "$ip" =~ ^202\.97\. ]]                                                       && echo "163"    && return
@@ -174,7 +434,61 @@ identify_ip_tag() {
 }
 
 # ============================================================
-# 核心: 分析线路类型
+# 从 ASN 识别 (国内 + 海外)
+# ============================================================
+identify_asn_tag() {
+    local asn="$1"
+    asn="${asn#AS}"
+    asn="${asn#as}"
+
+    # 国内 ASN
+    case "$asn" in
+        4809)  echo "CN2"   ; return ;;
+        4134)  echo "163"   ; return ;;
+        9929)  echo "9929"  ; return ;;
+        10099) echo "CUG"   ; return ;;
+        4837)  echo "4837"  ; return ;;
+        58807) echo "CMIN2" ; return ;;
+        58453) echo "CMI"   ; return ;;
+        9808)  echo "CMNET" ; return ;;
+    esac
+
+    # 海外 ASN
+    if [ -n "${OVERSEAS_ASN_MAP[$asn]}" ]; then
+        echo "${OVERSEAS_ASN_MAP[$asn]}"
+        return
+    fi
+}
+
+# ============================================================
+# 识别海外 IP 的运营商 (IP段 + ASN 双维度)
+# ============================================================
+get_overseas_tag() {
+    local ip="$1"
+    local line="$2"
+
+    # 先从 IP 段识别
+    local tag
+    tag=$(identify_overseas_ip "$ip")
+    if [ -n "$tag" ]; then
+        echo "$tag"
+        return
+    fi
+
+    # 再从 ASN 识别
+    local asn
+    asn=$(echo "$line" | grep -oP 'AS\d+' | head -1)
+    if [ -n "$asn" ]; then
+        asn="${asn#AS}"
+        if [ -n "${OVERSEAS_ASN_MAP[$asn]}" ]; then
+            echo "${OVERSEAS_ASN_MAP[$asn]}"
+            return
+        fi
+    fi
+}
+
+# ============================================================
+# 分析线路类型
 # ============================================================
 analyze_line_type() {
     local raw_data="$1"
@@ -225,34 +539,84 @@ analyze_line_type() {
 }
 
 # ============================================================
-# 提取详细路由路径: IP[标签] -> IP[标签] -> ...
+# 提取关键节点: 海外最后一跳[运营商] -> 国内第一跳[线路]
 # ============================================================
-extract_route_path() {
+extract_key_hops() {
     local raw_data="$1"
-    local path=""
+    local last_overseas_ip=""
+    local last_overseas_tag=""
+    local first_cn_ip=""
+    local first_cn_tag=""
+    local found_cn=0
 
-    while read -r ip; do
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+
+        local ip
+        ip=$(echo "$line" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
         [[ -z "$ip" ]] && continue
-        [[ "$ip" =~ ^10\. ]] && continue
-        [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]] && continue
-        [[ "$ip" =~ ^192\.168\. ]] && continue
-        [[ "$ip" =~ ^100\.(6[4-9]|[7-9][0-9]|1[0-2][0-7])\. ]] && continue
+        is_private_ip "$ip" && continue
 
-        local tag
-        tag=$(identify_ip_tag "$ip")
+        # 尝试识别国内标签
+        local cn_tag
+        cn_tag=$(identify_cn_tag "$ip")
 
-        if [ -n "$tag" ]; then
-            local entry="${ip}[${tag}]"
-            if [ -z "$path" ]; then
-                path="$entry"
-            else
-                path="${path} -> ${entry}"
+        # 没从 IP 识别出来, 再从 ASN 补充
+        if [ -z "$cn_tag" ]; then
+            local asn
+            asn=$(echo "$line" | grep -oP 'AS\d+' | head -1)
+            if [ -n "$asn" ]; then
+                local asn_tag
+                asn_tag=$(identify_asn_tag "$asn")
+                # 只有国内标签才算国内节点
+                case "$asn_tag" in
+                    CN2|163|9929|CUG|4837|CMIN2|CMI|CMNET)
+                        cn_tag="$asn_tag"
+                        ;;
+                esac
             fi
         fi
-    done < <(echo "$raw_data" | grep -oP '\d+\.\d+\.\d+\.\d+')
 
-    [ -z "$path" ] && path="-"
-    echo "$path"
+        if [ -n "$cn_tag" ] || is_cn_ip "$ip"; then
+            # === 国内节点 ===
+            if [ $found_cn -eq 0 ]; then
+                first_cn_ip="$ip"
+                first_cn_tag="${cn_tag:-CN}"
+                found_cn=1
+            fi
+        else
+            # === 海外节点 ===
+            if [ $found_cn -eq 0 ]; then
+                last_overseas_ip="$ip"
+                # 识别海外运营商
+                local o_tag
+                o_tag=$(get_overseas_tag "$ip" "$line")
+                last_overseas_tag="${o_tag}"
+            fi
+        fi
+    done <<< "$raw_data"
+
+    # 组合输出
+    local overseas_str=""
+    local cn_str=""
+
+    if [ -n "$last_overseas_ip" ]; then
+        if [ -n "$last_overseas_tag" ]; then
+            overseas_str="${last_overseas_ip}[${last_overseas_tag}]"
+        else
+            overseas_str="${last_overseas_ip}"
+        fi
+    else
+        overseas_str="*"
+    fi
+
+    if [ -n "$first_cn_ip" ]; then
+        cn_str="${first_cn_ip}[${first_cn_tag}]"
+    else
+        cn_str="*"
+    fi
+
+    echo "${overseas_str} -> ${cn_str}"
 }
 
 # ============================================================
@@ -287,8 +651,8 @@ check_target() {
     local line_type
     line_type=$(analyze_line_type "$raw_data" "$isp_type")
 
-    local route_path
-    route_path=$(extract_route_path "$raw_data")
+    local key_hops
+    key_hops=$(extract_key_hops "$raw_data")
 
     local latency
     latency=$(get_latency "$ip")
@@ -300,10 +664,8 @@ check_target() {
         *"普通"*) color="${RED}" ;;
     esac
 
-    printf "  %-10s ${color}%-22s${NC}  延迟: %sms\n" \
-           "$name" "$line_type" "$latency"
-    echo -e "             ${CYAN}路径: ${NC}${route_path}"
-    echo ""
+    printf "  %-10s ${color}%-22s${NC}  延迟: %-10s  入口: %s\n" \
+           "$name" "$line_type" "${latency}ms" "$key_hops"
 }
 
 # ============================================================
@@ -316,25 +678,44 @@ detailed_trace() {
     local ip
     ip=$(resolve_host "$host")
 
-    echo -e "\n${CYAN}===== ${name} (${ip}) =====${NC}"
+    echo -e "\n${CYAN}===== ${name} (${ip}) [${TRACE_TOOL}] =====${NC}"
 
     get_trace_data "$ip" | while IFS= read -r line; do
-        if echo "$line" | grep -qP '59\.43\.'; then
-            echo -e "${GREEN}${line}  <- CN2${NC}"
-        elif echo "$line" | grep -qP '202\.97\.'; then
-            echo -e "${RED}${line}  <- 163骨干${NC}"
-        elif echo "$line" | grep -qP '218\.105\.|210\.51\.'; then
-            echo -e "${GREEN}${line}  <- 联通9929${NC}"
-        elif echo "$line" | grep -qP '219\.158\.'; then
-            echo -e "${RED}${line}  <- 联通4837${NC}"
-        elif echo "$line" | grep -qP '209\.58\.|43\.252\.'; then
-            echo -e "${GREEN}${line}  <- 联通CUG${NC}"
-        elif echo "$line" | grep -qP '223\.120\.(12[89]|1[3-9][0-9]|2[0-4][0-9]|25[0-5])\.'; then
-            echo -e "${GREEN}${line}  <- CMIN2${NC}"
-        elif echo "$line" | grep -qP '223\.11[89]\.|223\.12[01]\.'; then
-            echo -e "${YELLOW}${line}  <- CMI${NC}"
-        elif echo "$line" | grep -qP '221\.(17[6-9]|18[0-3])\.'; then
-            echo -e "${RED}${line}  <- CMNET${NC}"
+        # 提取 IP 和 ASN
+        local hop_ip
+        hop_ip=$(echo "$line" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
+
+        local label=""
+
+        # 国内标签
+        if [ -n "$hop_ip" ]; then
+            label=$(identify_cn_tag "$hop_ip")
+        fi
+
+        # ASN 标签
+        if [ -z "$label" ]; then
+            local asn
+            asn=$(echo "$line" | grep -oP 'AS\d+' | head -1)
+            [ -n "$asn" ] && label=$(identify_asn_tag "$asn")
+        fi
+
+        # 海外 IP 标签
+        if [ -z "$label" ] && [ -n "$hop_ip" ] && ! is_private_ip "$hop_ip"; then
+            label=$(identify_overseas_ip "$hop_ip")
+        fi
+
+        # 着色输出
+        if [ -n "$label" ]; then
+            case "$label" in
+                CN2|9929|CUG|CMIN2)
+                    echo -e "${GREEN}${line}  <- ${label}${NC}" ;;
+                CMI|Telia|NTT|PCCW|HKT|CTGNet)
+                    echo -e "${YELLOW}${line}  <- ${label}${NC}" ;;
+                163|4837|CMNET)
+                    echo -e "${RED}${line}  <- ${label}${NC}" ;;
+                *)
+                    echo -e "${BLUE}${line}  <- ${label}${NC}" ;;
+            esac
         else
             echo "$line"
         fi
@@ -346,7 +727,7 @@ detailed_trace() {
 # ============================================================
 show_menu() {
     echo -e "${WHITE}请选择检测模式:${NC}"
-    echo -e "  ${GREEN}1)${NC} 快速检测 - 显示线路类型和详细路径"
+    echo -e "  ${GREEN}1)${NC} 快速检测 - 显示线路类型和关键节点"
     echo -e "  ${GREEN}2)${NC} 详细检测 - 显示完整路由追踪"
     echo -e "  ${GREEN}3)${NC} 指定目标 - 选择单个目标检测"
     echo -e "  ${GREEN}0)${NC} 退出"
@@ -359,32 +740,30 @@ show_menu() {
 # 快速检测
 # ============================================================
 quick_test() {
-    echo -e "\n${CYAN}[开始回程路由检测]${NC}"
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "\n${CYAN}[开始回程路由检测] (工具: ${TRACE_TOOL})${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-    local total=${#ORDERED_KEYS[@]}
-    local current=0
     local last_city=""
 
     for key in "${ORDERED_KEYS[@]}"; do
-        ((current++))
-
         local city
         city=$(echo "$key" | grep -oP '^.{2}')
         if [ -n "$last_city" ] && [ "$city" != "$last_city" ]; then
-            echo -e "${CYAN}  ──────────────────────────────────────────────────────────────────${NC}"
+            echo -e "${CYAN}  ──────────────────────────────────────────────────────────────────────────────────────────${NC}"
         fi
         last_city="$city"
 
         check_target "$key" "${TARGETS[$key]}"
     done
 
-    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo -e "  线路等级:"
     echo -e "    电信: ${GREEN}CN2 GIA [顶级]${NC} > ${YELLOW}CN2 GT [优质]${NC} > ${RED}电信163 [普通]${NC}"
     echo -e "    联通: ${GREEN}9929/CUG [顶级]${NC} > ${YELLOW}CUG+4837 [优质]${NC} > ${RED}4837 [普通]${NC}"
     echo -e "    移动: ${GREEN}CMIN2 [顶级]${NC} > ${YELLOW}CMI [优质]${NC} > ${RED}CMNET [普通]${NC}"
+    echo ""
+    echo -e "  入口格式: 海外最后一跳[运营商] -> 国内第一跳[线路]"
     echo ""
 }
 
@@ -392,7 +771,7 @@ quick_test() {
 # 详细检测
 # ============================================================
 detailed_test() {
-    echo -e "\n${CYAN}[开始详细路由追踪]${NC}"
+    echo -e "\n${CYAN}[开始详细路由追踪] (工具: ${TRACE_TOOL})${NC}"
 
     for key in "${ORDERED_KEYS[@]}"; do
         detailed_trace "$key" "${TARGETS[$key]}"
@@ -418,7 +797,7 @@ single_test() {
         local selected_key="${ORDERED_KEYS[$((sel-1))]}"
         local selected_target="${TARGETS[$selected_key]}"
 
-        echo -e "\n${CYAN}[检测 ${selected_key}]${NC}"
+        echo -e "\n${CYAN}[检测 ${selected_key}] (工具: ${TRACE_TOOL})${NC}"
         check_target "$selected_key" "$selected_target"
         detailed_trace "$selected_key" "$selected_target"
     else
