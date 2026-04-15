@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# VPS 回程线路检测脚本 v2.4
+# VPS 回程线路检测脚本 v2.5
 # 检测到北京/上海/广州三网回程路由类型
 # ============================================================
 
@@ -43,7 +43,7 @@ print_banner() {
     clear
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║              VPS 回程线路检测脚本 v2.4                  ║"
+    echo "║              VPS 回程线路检测脚本 v2.5                  ║"
     echo "║          检测三网回程路由 & 线路类型识别                 ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -51,7 +51,6 @@ print_banner() {
     echo -e "  主机名称: ${WHITE}$(hostname)${NC}"
     echo -e "  系统信息: ${WHITE}$(uname -r)${NC}"
 
-    # 调用 ipinfo.io 获取详细 IP 信息
     echo -e "${YELLOW}[*] 获取本机 IP 信息...${NC}"
     local ipinfo
     ipinfo=$(curl -s --connect-timeout 5 https://ipinfo.io 2>/dev/null)
@@ -231,11 +230,8 @@ analyze_line_type() {
 extract_route_path() {
     local raw_data="$1"
     local path=""
-    local last_tag=""
 
-    # 按行顺序提取每一跳的 IP
     while read -r ip; do
-        # 排除私有地址和空行
         [[ -z "$ip" ]] && continue
         [[ "$ip" =~ ^10\. ]] && continue
         [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]] && continue
@@ -246,14 +242,12 @@ extract_route_path() {
         tag=$(identify_ip_tag "$ip")
 
         if [ -n "$tag" ]; then
-            # 有标签的关键节点: 显示 IP[标签]
             local entry="${ip}[${tag}]"
             if [ -z "$path" ]; then
                 path="$entry"
             else
                 path="${path} -> ${entry}"
             fi
-            last_tag="$tag"
         fi
     done < <(echo "$raw_data" | grep -oP '\d+\.\d+\.\d+\.\d+')
 
@@ -306,10 +300,8 @@ check_target() {
         *"普通"*) color="${RED}" ;;
     esac
 
-    # 第一行: 目标 + 线路类型 + 延迟
     printf "  %-10s ${color}%-22s${NC}  延迟: %sms\n" \
            "$name" "$line_type" "$latency"
-    # 第二行: 详细路径
     echo -e "             ${CYAN}路径: ${NC}${route_path}"
     echo ""
 }
@@ -359,7 +351,7 @@ show_menu() {
     echo -e "  ${GREEN}3)${NC} 指定目标 - 选择单个目标检测"
     echo -e "  ${GREEN}0)${NC} 退出"
     echo ""
-    read -rp "请输入选项 [1]: " choice
+    read -rp "请输入选项 [1]: " choice < /dev/tty
     choice=${choice:-1}
 }
 
@@ -377,7 +369,6 @@ quick_test() {
     for key in "${ORDERED_KEYS[@]}"; do
         ((current++))
 
-        # 城市分隔线
         local city
         city=$(echo "$key" | grep -oP '^.{2}')
         if [ -n "$last_city" ] && [ "$city" != "$last_city" ]; then
@@ -385,9 +376,6 @@ quick_test() {
         fi
         last_city="$city"
 
-        echo -ne "\033[2K\r${YELLOW}[${current}/${total}] 正在检测: ${key}...${NC}\r"
-        # 清掉进度提示后输出结果
-        echo -ne "\033[2K\r"
         check_target "$key" "${TARGETS[$key]}"
     done
 
@@ -424,7 +412,7 @@ single_test() {
         ((idx++))
     done
     echo ""
-    read -rp "请选择目标 [1-9]: " sel
+    read -rp "请选择目标 [1-9]: " sel < /dev/tty
 
     if [ "$sel" -ge 1 ] && [ "$sel" -le 9 ] 2>/dev/null; then
         local selected_key="${ORDERED_KEYS[$((sel-1))]}"
