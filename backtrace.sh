@@ -10,12 +10,29 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-PURPLE='\033[0;35m'
 WHITE='\033[1;37m'
 NC='\033[0m'
-BOLD='\033[1m'
 
 TRACE_TOOL=""
+PKG_INSTALL=""
+
+has_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+extract_ipv4() {
+    grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
+}
+
+extract_asn() {
+    grep -Eio 'AS[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]'
+}
+
+download_file() {
+    local url="$1"
+    local output="$2"
+    curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 1 "$url" -o "$output" 2>/dev/null
+}
 
 # ============================================================
 # 目标节点
@@ -185,7 +202,7 @@ is_private_ip() {
 # Banner
 # ============================================================
 print_banner() {
-    clear
+    [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ] && clear
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════╗"
     echo "║              VPS 回程线路检测脚本 v2.8                  ║"
@@ -198,21 +215,21 @@ print_banner() {
 
     echo -e "${YELLOW}[*] 获取本机 IP 信息...${NC}"
     local ipinfo
-    ipinfo=$(curl -s --connect-timeout 5 https://ipinfo.io 2>/dev/null)
+    ipinfo=$(curl -fsSL --connect-timeout 5 https://ipinfo.io 2>/dev/null || true)
 
     if [ -n "$ipinfo" ] && echo "$ipinfo" | grep -q '"ip"'; then
         local ip org country city
-        ip=$(echo "$ipinfo" | grep -oP '"ip"\s*:\s*"\K[^"]+')
-        org=$(echo "$ipinfo" | grep -oP '"org"\s*:\s*"\K[^"]+')
-        country=$(echo "$ipinfo" | grep -oP '"country"\s*:\s*"\K[^"]+')
-        city=$(echo "$ipinfo" | grep -oP '"city"\s*:\s*"\K[^"]+')
+        ip=$(printf '%s\n' "$ipinfo" | sed -nE 's/.*"ip"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)
+        org=$(printf '%s\n' "$ipinfo" | sed -nE 's/.*"org"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)
+        country=$(printf '%s\n' "$ipinfo" | sed -nE 's/.*"country"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)
+        city=$(printf '%s\n' "$ipinfo" | sed -nE 's/.*"city"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)
 
         echo -e "  公网  IP: ${WHITE}${ip}${NC}"
         echo -e "  运营商  : ${WHITE}${org}${NC}"
         echo -e "  位置    : ${WHITE}${city}, ${country}${NC}"
     else
         local pub_ip
-        pub_ip=$(curl -s --connect-timeout 5 ip.sb 2>/dev/null || echo "获取失败")
+        pub_ip=$(curl -fsSL --connect-timeout 5 ip.sb 2>/dev/null || echo "获取失败")
         echo -e "  公网  IP: ${WHITE}${pub_ip}${NC}"
         echo -e "  运营商  : ${WHITE}获取失败${NC}"
     fi
@@ -239,7 +256,7 @@ install_nexttrace() {
 
     for url in "${urls[@]}"; do
         echo -e "${YELLOW}    尝试: ${url}${NC}"
-        if curl -sL --connect-timeout 10 "$url" -o /usr/local/bin/nexttrace 2>/dev/null; then
+        if download_file "$url" /usr/local/bin/nexttrace; then
             chmod +x /usr/local/bin/nexttrace
             if /usr/local/bin/nexttrace --version &>/dev/null; then
                 echo -e "${GREEN}    [✓] nexttrace 安装成功${NC}"
@@ -275,11 +292,11 @@ install_besttrace() {
     local tmpdir
     tmpdir=$(mktemp -d)
 
-    if curl -sL --connect-timeout 10 "$url" -o "${tmpdir}/besttrace.zip" 2>/dev/null; then
-        if ! command -v unzip &>/dev/null; then
-            $PKG_INSTALL unzip >/dev/null 2>&1
+    if download_file "$url" "${tmpdir}/besttrace.zip"; then
+        if ! has_cmd unzip && [ -n "$PKG_INSTALL" ]; then
+            $PKG_INSTALL unzip >/dev/null 2>&1 || true
         fi
-        if command -v unzip &>/dev/null; then
+        if has_cmd unzip; then
             unzip -q "${tmpdir}/besttrace.zip" -d "${tmpdir}/" 2>/dev/null
             local bt_bin
             bt_bin=$(find "${tmpdir}" -name "besttrace*" -type f ! -name "*.zip" | head -1)
@@ -304,34 +321,38 @@ install_besttrace() {
 install_dependencies() {
     echo -e "${YELLOW}[*] 检查并安装必要工具...${NC}"
 
-    if command -v apt-get &>/dev/null; then
+    if has_cmd apt-get; then
         PKG_INSTALL="apt-get install -y"
-    elif command -v yum &>/dev/null; then
+    elif has_cmd yum; then
         PKG_INSTALL="yum install -y"
-    elif command -v dnf &>/dev/null; then
+    elif has_cmd dnf; then
         PKG_INSTALL="dnf install -y"
-    elif command -v pacman &>/dev/null; then
+    elif has_cmd pacman; then
         PKG_INSTALL="pacman -S --noconfirm"
     fi
 
-    if ! command -v traceroute &>/dev/null; then
+    if [ -z "$PKG_INSTALL" ]; then
+        echo -e "${YELLOW}[!] 未识别包管理器，将仅使用系统已安装工具${NC}"
+    fi
+
+    if ! has_cmd traceroute && [ -n "$PKG_INSTALL" ]; then
         echo -e "${YELLOW}[*] 安装 traceroute...${NC}"
-        $PKG_INSTALL traceroute >/dev/null 2>&1
+        $PKG_INSTALL traceroute >/dev/null 2>&1 || true
     fi
 
-    if ! command -v mtr &>/dev/null; then
+    if ! has_cmd mtr && [ -n "$PKG_INSTALL" ]; then
         echo -e "${YELLOW}[*] 安装 mtr...${NC}"
-        $PKG_INSTALL mtr >/dev/null 2>&1
+        $PKG_INSTALL mtr >/dev/null 2>&1 || true
     fi
 
-    if ! command -v dig &>/dev/null; then
-        echo -e "${YELLOW}[*] 安装 dnsutils...${NC}"
-        $PKG_INSTALL dnsutils >/dev/null 2>&1 || $PKG_INSTALL bind-utils >/dev/null 2>&1
+    if ! has_cmd dig && ! has_cmd getent && ! has_cmd host && [ -n "$PKG_INSTALL" ]; then
+        echo -e "${YELLOW}[*] 安装 DNS 查询工具...${NC}"
+        $PKG_INSTALL dnsutils >/dev/null 2>&1 || $PKG_INSTALL bind-utils >/dev/null 2>&1 || true
     fi
 
     echo -e "${YELLOW}[*] 选择路由追踪工具...${NC}"
 
-    if command -v nexttrace &>/dev/null && nexttrace --version &>/dev/null; then
+    if has_cmd nexttrace && nexttrace --version &>/dev/null; then
         TRACE_TOOL="nexttrace"
         echo -e "${GREEN}[✓] 使用 nexttrace${NC}"
     else
@@ -342,7 +363,7 @@ install_dependencies() {
     fi
 
     if [ -z "$TRACE_TOOL" ]; then
-        if command -v besttrace &>/dev/null; then
+        if has_cmd besttrace; then
             TRACE_TOOL="besttrace"
             echo -e "${GREEN}[✓] 使用 besttrace${NC}"
         else
@@ -354,14 +375,14 @@ install_dependencies() {
     fi
 
     if [ -z "$TRACE_TOOL" ]; then
-        if command -v mtr &>/dev/null; then
+        if has_cmd mtr; then
             TRACE_TOOL="mtr"
             echo -e "${YELLOW}[✓] 使用 mtr${NC}"
         fi
     fi
 
     if [ -z "$TRACE_TOOL" ]; then
-        if command -v traceroute &>/dev/null; then
+        if has_cmd traceroute; then
             TRACE_TOOL="traceroute"
             echo -e "${YELLOW}[✓] 使用 traceroute${NC}"
         else
@@ -380,12 +401,14 @@ install_dependencies() {
 resolve_host() {
     local host="$1"
     local ip
-    ip=$(dig +short "$host" 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
-    if [ -z "$ip" ]; then
-        ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1}' | head -1)
+    if has_cmd dig; then
+        ip=$(dig +short "$host" 2>/dev/null | extract_ipv4)
     fi
-    if [ -z "$ip" ]; then
-        ip=$(host "$host" 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
+    if [ -z "$ip" ] && has_cmd getent; then
+        ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1}' | extract_ipv4)
+    fi
+    if [ -z "$ip" ] && has_cmd host; then
+        ip=$(host "$host" 2>/dev/null | extract_ipv4)
     fi
     [ -z "$ip" ] && ip="$host"
     echo "$ip"
@@ -477,7 +500,7 @@ get_overseas_tag() {
 
     # 再从 ASN 识别
     local asn
-    asn=$(echo "$line" | grep -oP 'AS\d+' | head -1)
+    asn=$(echo "$line" | extract_asn)
     if [ -n "$asn" ]; then
         asn="${asn#AS}"
         if [ -n "${OVERSEAS_ASN_MAP[$asn]}" ]; then
@@ -553,7 +576,7 @@ extract_key_hops() {
         [[ -z "$line" ]] && continue
 
         local ip
-        ip=$(echo "$line" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
+        ip=$(echo "$line" | extract_ipv4)
         [[ -z "$ip" ]] && continue
         is_private_ip "$ip" && continue
 
@@ -564,7 +587,7 @@ extract_key_hops() {
         # 没从 IP 识别出来, 再从 ASN 补充
         if [ -z "$cn_tag" ]; then
             local asn
-            asn=$(echo "$line" | grep -oP 'AS\d+' | head -1)
+            asn=$(echo "$line" | extract_asn)
             if [ -n "$asn" ]; then
                 local asn_tag
                 asn_tag=$(identify_asn_tag "$asn")
@@ -625,7 +648,13 @@ extract_key_hops() {
 get_latency() {
     local ip="$1"
     local lat
-    lat=$(ping -c 3 -W 3 "$ip" 2>/dev/null | tail -1 | awk -F'/' '{printf "%.1f", $5}')
+
+    if ! has_cmd ping; then
+        echo "超时"
+        return
+    fi
+
+    lat=$(ping -c 3 -W 3 "$ip" 2>/dev/null | awk -F'/' '/^rtt|^round-trip/ {printf "%.1f", $5}')
     [ -z "$lat" ] && lat="超时"
     echo "$lat"
 }
@@ -656,6 +685,8 @@ check_target() {
 
     local latency
     latency=$(get_latency "$ip")
+    local latency_display="$latency"
+    [ "$latency" != "超时" ] && latency_display="${latency}ms"
 
     local color="${WHITE}"
     case "$line_type" in
@@ -665,7 +696,7 @@ check_target() {
     esac
 
     printf "  %-10s ${color}%-22s${NC}  延迟: %-10s  入口: %s\n" \
-           "$name" "$line_type" "${latency}ms" "$key_hops"
+           "$name" "$line_type" "$latency_display" "$key_hops"
 }
 
 # ============================================================
@@ -683,7 +714,7 @@ detailed_trace() {
     get_trace_data "$ip" | while IFS= read -r line; do
         # 提取 IP 和 ASN
         local hop_ip
-        hop_ip=$(echo "$line" | grep -oP '\d+\.\d+\.\d+\.\d+' | head -1)
+        hop_ip=$(echo "$line" | extract_ipv4)
 
         local label=""
 
@@ -695,7 +726,7 @@ detailed_trace() {
         # ASN 标签
         if [ -z "$label" ]; then
             local asn
-            asn=$(echo "$line" | grep -oP 'AS\d+' | head -1)
+            asn=$(echo "$line" | extract_asn)
             [ -n "$asn" ] && label=$(identify_asn_tag "$asn")
         fi
 
@@ -732,7 +763,15 @@ show_menu() {
     echo -e "  ${GREEN}3)${NC} 指定目标 - 选择单个目标检测"
     echo -e "  ${GREEN}0)${NC} 退出"
     echo ""
-    read -rp "请输入选项 [1]: " choice < /dev/tty
+
+    if [ -t 0 ]; then
+        read -rp "请输入选项 [1]: " choice
+    elif [ -t 1 ] && [ -r /dev/tty ]; then
+        read -rp "请输入选项 [1]: " choice < /dev/tty
+    else
+        choice=1
+        echo -e "${YELLOW}[!] 未检测到交互终端，默认执行快速检测${NC}"
+    fi
     choice=${choice:-1}
 }
 
@@ -747,7 +786,7 @@ quick_test() {
 
     for key in "${ORDERED_KEYS[@]}"; do
         local city
-        city=$(echo "$key" | grep -oP '^.{2}')
+        city=${key:0:2}
         if [ -n "$last_city" ] && [ "$city" != "$last_city" ]; then
             echo -e "${CYAN}  ──────────────────────────────────────────────────────────────────────────────────────────${NC}"
         fi
@@ -791,7 +830,14 @@ single_test() {
         ((idx++))
     done
     echo ""
-    read -rp "请选择目标 [1-9]: " sel < /dev/tty
+    if [ -t 0 ]; then
+        read -rp "请选择目标 [1-9]: " sel
+    elif [ -t 1 ] && [ -r /dev/tty ]; then
+        read -rp "请选择目标 [1-9]: " sel < /dev/tty
+    else
+        sel=1
+        echo -e "${YELLOW}[!] 未检测到交互终端，默认选择 1${NC}"
+    fi
 
     if [ "$sel" -ge 1 ] && [ "$sel" -le 9 ] 2>/dev/null; then
         local selected_key="${ORDERED_KEYS[$((sel-1))]}"
@@ -829,4 +875,6 @@ main() {
     echo -e "${GREEN}[✓] 检测完成！${NC}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
