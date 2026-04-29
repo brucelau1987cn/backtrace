@@ -617,31 +617,6 @@ get_overseas_tag() {
 }
 
 
-trace_last_isp() {
-    local raw_data="$1"
-    local last_isp=""
-
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-
-        local ip tag asn isp
-        ip=$(echo "$line" | extract_ipv4)
-        [ -n "$ip" ] && tag=$(identify_cn_tag "$ip")
-
-        if [ -z "$tag" ]; then
-            asn=$(echo "$line" | extract_asn)
-            [ -n "$asn" ] && tag=$(identify_asn_tag "$asn")
-        fi
-
-        if is_line_tag "$tag"; then
-            isp=$(line_tag_isp "$tag")
-            [ -n "$isp" ] && last_isp="$isp"
-        fi
-    done <<< "$raw_data"
-
-    echo "$last_isp"
-}
-
 trace_has_tag() {
     local raw_data="$1"
     local target_tag="$2"
@@ -674,9 +649,25 @@ analyze_line_type() {
     local target_name="${4:-}"
     local result="未识别"
 
-    local effective_isp
-    effective_isp=$(trace_last_isp "$raw_data")
-    [ -n "$effective_isp" ] && isp_type="$effective_isp"
+    # 先判断跨网/承载线路组合，避免最后的目标运营商 ASN 把真实承载线路覆盖掉。
+    # 例如 CUG -> 4837 -> 4134，应判断为 CUG+4837，而不是电信 163。
+    if trace_has_tag "$raw_data" "9929"; then
+        echo "联通9929 [顶级线路]"
+        return
+    elif trace_has_tag "$raw_data" "CUG"; then
+        if trace_has_tag "$raw_data" "4837"; then
+            echo "CUG+4837 [优质线路]"
+        else
+            echo "联通CUG [优质线路]"
+        fi
+        return
+    elif trace_has_tag "$raw_data" "CMIN2"; then
+        echo "移动CMIN2 [顶级线路]"
+        return
+    elif trace_has_tag "$raw_data" "CMI"; then
+        echo "移动CMI [优质线路]"
+        return
+    fi
 
     case "$isp_type" in
     "电信")
