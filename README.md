@@ -121,6 +121,12 @@ curl -fsSL https://raw.githubusercontent.com/brucelau1987cn/backtrace/main/backt
 ╰──────────┴────────────┴──────────────────┴────────────────────╯
 ```
 
+## 📄 许可证
+
+本项目基于 **GNU Affero General Public License v3.0 (AGPL-3.0-only)** 开源。
+
+详见 [LICENSE](LICENSE)。
+
 ## ⚠️ 说明
 
 - 路由结果受运营商调度、目标节点、当前网络状态影响，可能随时间变化。
