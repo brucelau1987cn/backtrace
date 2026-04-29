@@ -65,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/brucelau1987cn/backtrace/main/backt
 
 | 运营商 | 线路类型 |
 | --- | --- |
-| 电信 | CN2 GIA、CN2 GT、CTG、163 |
+| 电信 | CN2 GIA、CN2 GT、CTG、163Plus、163 |
 | 联通 | 9929、CUG、CUG+4837、4837 |
 | 移动 | CMIN2、CMI、CMNET |
 
@@ -77,6 +77,9 @@ curl -fsSL https://raw.githubusercontent.com/brucelau1987cn/backtrace/main/backt
 规则库已补充常见高置信 ASN / IP 段，例如：
 
 - 电信：`AS4809` / `59.43`、`AS4134` / `202.97`、`AS23764` / `69.194` / `203.22.17x`
+  - 纯 `202.97 / AS4134` 默认判断为 `电信163 [普通线路]`
+  - 仅当延迟符合 163Plus 阈值时，判断为 `电信163Plus [优质线路]`
+  - 当前阈值：广州 `<25ms`，上海 `<45ms`，北京 `<55ms`
 - 联通：`AS9929` / `218.105` / `210.51`、`AS10099` / `202.77.23`、`AS4837` / `219.158` / `221.4-7`
 - 移动：`AS58807` / 高段 `223.120`、`AS58453` / `223.120` / `223.118-121`、`AS9808` / `221.176-183` / `120.192-199`
 

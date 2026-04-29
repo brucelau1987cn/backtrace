@@ -560,6 +560,7 @@ line_preferred_tags() {
     local line_type="$1"
     case "$line_type" in
         *"CN2"*) echo "CN2" ;;
+        *"电信163Plus"*) echo "163" ;;
         *"电信163"*) echo "163" ;;
         *"CTG"*) echo "CTG 163" ;;
         *"9929"*) echo "9929" ;;
@@ -628,6 +629,8 @@ trace_has_tag() {
 analyze_line_type() {
     local raw_data="$1"
     local isp_type="$2"
+    local latency="${3:-}"
+    local target_name="${4:-}"
     local result="未识别"
 
     case "$isp_type" in
@@ -639,7 +642,11 @@ analyze_line_type() {
                 result="CN2 GIA [顶级线路]"
             fi
         elif trace_has_tag "$raw_data" "163"; then
-            result="电信163 [优质线路]"
+            if is_163plus_latency "$target_name" "$latency"; then
+                result="电信163Plus [优质线路]"
+            else
+                result="电信163 [普通线路]"
+            fi
         elif trace_has_tag "$raw_data" "CTG"; then
             result="电信CTG [优质线路]"
         fi
@@ -673,6 +680,23 @@ analyze_line_type() {
     esac
 
     echo "$result"
+}
+
+is_163plus_latency() {
+    local target_name="$1"
+    local latency="$2"
+    local threshold=""
+
+    [ -z "$latency" ] || [ "$latency" = "超时" ] && return 1
+
+    case "$target_name" in
+        *"广州"*) threshold=25 ;;
+        *"上海"*) threshold=45 ;;
+        *"北京"*) threshold=55 ;;
+        *) return 1 ;;
+    esac
+
+    awk -v lat="$latency" -v max="$threshold" 'BEGIN { exit !(lat > 0 && lat < max) }'
 }
 
 # ============================================================
@@ -792,16 +816,16 @@ format_target_line() {
     local raw_data
     raw_data=$(get_trace_data "$ip")
 
-    local line_type
-    line_type=$(analyze_line_type "$raw_data" "$isp_type")
-
-    local key_hops
-    key_hops=$(extract_key_hops "$raw_data" "$line_type")
-
     local latency
     latency=$(get_latency "$ip")
     local latency_display="$latency"
     [ "$latency" != "超时" ] && latency_display="${latency}ms"
+
+    local line_type
+    line_type=$(analyze_line_type "$raw_data" "$isp_type" "$latency" "$name")
+
+    local key_hops
+    key_hops=$(extract_key_hops "$raw_data" "$line_type")
 
     local level line color icon latency_colored node_colored
     level=$(line_level "$line_type")
