@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/brucelau1987cn/backtrace/main/backt
 同时会展示：
 
 ```text
-海外最后一跳[运营商] -> 国内第一跳[线路]
+国内口上一跳[运营商] -> 国内入口第一跳[线路]
 ```
 
 便于快速判断实际入口质量。

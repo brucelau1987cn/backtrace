@@ -527,7 +527,7 @@ analyze_line_type() {
                 result="CN2 GIA   [顶级线路]"
             fi
         elif echo "$raw_data" | grep -qE "AS4134|202\.97\."; then
-            result="电信163   [普通线路]"
+            result="电信163   [优化线路]"
         fi
         ;;
     "联通")
@@ -562,12 +562,14 @@ analyze_line_type() {
 }
 
 # ============================================================
-# 提取关键节点: 海外最后一跳[运营商] -> 国内第一跳[线路]
+# 提取关键节点: 国内口上一跳[运营商] -> 国内入口第一跳[线路]
 # ============================================================
 extract_key_hops() {
     local raw_data="$1"
-    local last_overseas_ip=""
-    local last_overseas_tag=""
+    local prev_public_ip=""
+    local prev_public_tag=""
+    local pre_cn_ip=""
+    local pre_cn_tag=""
     local first_cn_ip=""
     local first_cn_tag=""
     local found_cn=0
@@ -601,45 +603,42 @@ extract_key_hops() {
         fi
 
         if [ -n "$cn_tag" ] || is_cn_ip "$ip"; then
-            # === 国内节点 ===
+            # === 国内入口第一跳 ===
             if [ $found_cn -eq 0 ]; then
+                pre_cn_ip="$prev_public_ip"
+                pre_cn_tag="$prev_public_tag"
                 first_cn_ip="$ip"
                 first_cn_tag="${cn_tag:-CN}"
                 found_cn=1
             fi
         else
-            # === 海外节点 ===
+            # === 国内口上一跳：第一个国内节点之前的最后一个公网节点 ===
             if [ $found_cn -eq 0 ]; then
-                last_overseas_ip="$ip"
-                # 识别海外运营商
+                prev_public_ip="$ip"
                 local o_tag
                 o_tag=$(get_overseas_tag "$ip" "$line")
-                last_overseas_tag="${o_tag}"
+                prev_public_tag="$o_tag"
             fi
         fi
     done <<< "$raw_data"
 
     # 组合输出
-    local overseas_str=""
-    local cn_str=""
+    local pre_cn_str="*"
+    local cn_str="*"
 
-    if [ -n "$last_overseas_ip" ]; then
-        if [ -n "$last_overseas_tag" ]; then
-            overseas_str="${last_overseas_ip}[${last_overseas_tag}]"
+    if [ -n "$pre_cn_ip" ]; then
+        if [ -n "$pre_cn_tag" ]; then
+            pre_cn_str="${pre_cn_ip}[${pre_cn_tag}]"
         else
-            overseas_str="${last_overseas_ip}"
+            pre_cn_str="${pre_cn_ip}"
         fi
-    else
-        overseas_str="*"
     fi
 
     if [ -n "$first_cn_ip" ]; then
         cn_str="${first_cn_ip}[${first_cn_tag}]"
-    else
-        cn_str="*"
     fi
 
-    echo "${overseas_str} -> ${cn_str}"
+    echo "${pre_cn_str} -> ${cn_str}"
 }
 
 # ============================================================
@@ -798,11 +797,11 @@ quick_test() {
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo -e "  线路等级:"
-    echo -e "    电信: ${GREEN}CN2 GIA [顶级]${NC} > ${YELLOW}CN2 GT [优质]${NC} > ${RED}电信163 [普通]${NC}"
+    echo -e "    电信: ${GREEN}CN2 GIA [顶级]${NC} > ${YELLOW}CN2 GT / 电信163 [优化]${NC} > ${RED}电信163 [普通]${NC}"
     echo -e "    联通: ${GREEN}9929/CUG [顶级]${NC} > ${YELLOW}CUG+4837 [优质]${NC} > ${RED}4837 [普通]${NC}"
     echo -e "    移动: ${GREEN}CMIN2 [顶级]${NC} > ${YELLOW}CMI [优质]${NC} > ${RED}CMNET [普通]${NC}"
     echo ""
-    echo -e "  入口格式: 海外最后一跳[运营商] -> 国内第一跳[线路]"
+    echo -e "  入口格式: 国内口上一跳[运营商] -> 国内入口第一跳[线路]"
     echo ""
 }
 
