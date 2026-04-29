@@ -1,6 +1,6 @@
-# 🛰️ Backtrace
+# 🛰️ RouteCN
 
-> 一键检测 VPS 到中国大陆三网的回程线路。
+> VPS 回国三网线路检测脚本。
 
 <p align="center">
   <img alt="Shell" src="https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat-square&logo=gnubash&logoColor=white">
@@ -8,7 +8,7 @@
   <img alt="License" src="https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square">
 </p>
 
-Backtrace 用来快速判断 VPS 回国线路质量。
+RouteCN 用来快速判断 VPS 回国三网线路质量。
 默认检测北京、上海、广州三地三网，输出线路类型、延迟和关键判断节点。
 
 支持识别：
