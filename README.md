@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/brucelau1987cn/backtrace/main/backt
 
 | 模式 | 说明 |
 | --- | --- |
-| 快速检测 | 显示线路类型、延迟和关键入口节点 |
+| 快速检测 | 显示线路类型、延迟和关键判断节点 |
 | 详细检测 | 显示完整路由追踪，并对关键线路 / 运营商打标 |
 | 指定目标 | 选择单个节点进行检测 |
 
@@ -57,12 +57,13 @@ curl -fsSL https://raw.githubusercontent.com/brucelau1987cn/backtrace/main/backt
 
 脚本会自动选择可用的路由追踪工具：
 
-1. `nexttrace`
-2. `besttrace`
+1. `tracepath`：无需安装概率最高、无 API 限制、无需 root
+2. `traceroute`
 3. `mtr`
-4. `traceroute`
+4. `nexttrace`：仅作为已安装时的备用方案
+5. `besttrace`：仅作为已安装时的备用方案
 
-优先使用 NextTrace；如果不可用，会尝试安装或自动降级到其他工具。
+默认优先使用系统已有工具，不再自动安装 NextTrace，避免 API 访问限制。
 
 ## 🧠 识别能力
 

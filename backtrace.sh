@@ -342,10 +342,10 @@ install_besttrace() {
 }
 
 # ============================================================
-# 安装依赖 & 选择追踪工具
+# 检查依赖 & 选择追踪工具
 # ============================================================
 install_dependencies() {
-    echo -e "${YELLOW}[*] 检查并安装必要工具...${NC}"
+    echo -e "${YELLOW}[*] 检查可用追踪工具...${NC}"
 
     if has_cmd apt-get; then
         PKG_INSTALL="apt-get install -y"
@@ -357,18 +357,31 @@ install_dependencies() {
         PKG_INSTALL="pacman -S --noconfirm"
     fi
 
-    if [ -z "$PKG_INSTALL" ]; then
-        echo -e "${YELLOW}[!] 未识别包管理器，将仅使用系统已安装工具${NC}"
-    fi
+    echo -e "${YELLOW}[*] 选择路由追踪工具...${NC}"
 
-    if ! has_cmd traceroute && [ -n "$PKG_INSTALL" ]; then
-        echo -e "${YELLOW}[*] 安装 traceroute...${NC}"
+    # 默认优先使用系统自带/已安装工具，避免 nexttrace API 限制。
+    if has_cmd tracepath; then
+        TRACE_TOOL="tracepath"
+        echo -e "${GREEN}[✓] 使用 tracepath (无需安装 / 无 API 限制)${NC}"
+    elif has_cmd traceroute; then
+        TRACE_TOOL="traceroute"
+        echo -e "${GREEN}[✓] 使用 traceroute${NC}"
+    elif has_cmd mtr; then
+        TRACE_TOOL="mtr"
+        echo -e "${GREEN}[✓] 使用 mtr${NC}"
+    elif has_cmd nexttrace && nexttrace --version &>/dev/null; then
+        TRACE_TOOL="nexttrace"
+        echo -e "${YELLOW}[✓] 使用 nexttrace (备用)${NC}"
+    elif has_cmd besttrace; then
+        TRACE_TOOL="besttrace"
+        echo -e "${YELLOW}[✓] 使用 besttrace (备用)${NC}"
+    elif [ -n "$PKG_INSTALL" ]; then
+        echo -e "${YELLOW}[*] 未找到可用工具，尝试安装 traceroute...${NC}"
         $PKG_INSTALL traceroute >/dev/null 2>&1 || true
-    fi
-
-    if ! has_cmd mtr && [ -n "$PKG_INSTALL" ]; then
-        echo -e "${YELLOW}[*] 安装 mtr...${NC}"
-        $PKG_INSTALL mtr >/dev/null 2>&1 || true
+        if has_cmd traceroute; then
+            TRACE_TOOL="traceroute"
+            echo -e "${GREEN}[✓] 使用 traceroute${NC}"
+        fi
     fi
 
     if ! has_cmd dig && ! has_cmd getent && ! has_cmd host && [ -n "$PKG_INSTALL" ]; then
@@ -376,45 +389,9 @@ install_dependencies() {
         $PKG_INSTALL dnsutils >/dev/null 2>&1 || $PKG_INSTALL bind-utils >/dev/null 2>&1 || true
     fi
 
-    echo -e "${YELLOW}[*] 选择路由追踪工具...${NC}"
-
-    if has_cmd nexttrace && nexttrace --version &>/dev/null; then
-        TRACE_TOOL="nexttrace"
-        echo -e "${GREEN}[✓] 使用 nexttrace${NC}"
-    else
-        echo -e "${YELLOW}[*] 尝试安装 nexttrace...${NC}"
-        if install_nexttrace; then
-            TRACE_TOOL="nexttrace"
-        fi
-    fi
-
     if [ -z "$TRACE_TOOL" ]; then
-        if has_cmd besttrace; then
-            TRACE_TOOL="besttrace"
-            echo -e "${GREEN}[✓] 使用 besttrace${NC}"
-        else
-            echo -e "${YELLOW}[*] 尝试安装 besttrace...${NC}"
-            if install_besttrace; then
-                TRACE_TOOL="besttrace"
-            fi
-        fi
-    fi
-
-    if [ -z "$TRACE_TOOL" ]; then
-        if has_cmd mtr; then
-            TRACE_TOOL="mtr"
-            echo -e "${YELLOW}[✓] 使用 mtr${NC}"
-        fi
-    fi
-
-    if [ -z "$TRACE_TOOL" ]; then
-        if has_cmd traceroute; then
-            TRACE_TOOL="traceroute"
-            echo -e "${YELLOW}[✓] 使用 traceroute${NC}"
-        else
-            echo -e "${RED}[✗] 无可用追踪工具${NC}"
-            exit 1
-        fi
+        echo -e "${RED}[✗] 无可用追踪工具，请安装 tracepath / traceroute / mtr 任意一个${NC}"
+        exit 1
     fi
 
     echo -e "${GREEN}[✓] 工具检查完成 (追踪工具: ${TRACE_TOOL})${NC}"
@@ -454,6 +431,9 @@ get_trace_data() {
             ;;
         mtr)
             mtr -z -r -n -c 1 "$ip" 2>/dev/null
+            ;;
+        tracepath)
+            tracepath -n -m 20 "$ip" 2>/dev/null
             ;;
         traceroute)
             if traceroute --help 2>&1 | grep -q '\-A'; then
@@ -803,7 +783,7 @@ detailed_trace() {
 # ============================================================
 show_menu() {
     echo -e "${WHITE}请选择检测模式:${NC}"
-    echo -e "  ${GREEN}1)${NC} 快速检测 - 显示线路类型和关键节点"
+    echo -e "  ${GREEN}1)${NC} 快速检测 - 显示线路类型、延迟和判断节点"
     echo -e "  ${GREEN}2)${NC} 详细检测 - 显示完整路由追踪"
     echo -e "  ${GREEN}3)${NC} 指定目标 - 选择单个目标检测"
     echo -e "  ${GREEN}0)${NC} 退出"
