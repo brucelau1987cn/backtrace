@@ -36,7 +36,7 @@ run_with_timeout() {
 }
 
 extract_ipv4() {
-    grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1
+    grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | tail -1
 }
 
 extract_asn() {
@@ -139,6 +139,15 @@ OVERSEAS_ASN_MAP=(
 # 线路识别规则库 (更新 ASN / IP 段优先改这里)
 # ============================================================
 LINE_TAGS="CN2 163 CTG 9929 CUG 4837 CMIN2 CMI CMNET"
+TELECOM_TAGS="CN2 163 CTG"
+UNICOM_TAGS="9929 CUG 4837"
+MOBILE_TAGS="CMIN2 CMI CMNET"
+
+line_tag_isp() {
+    case " $TELECOM_TAGS " in *" $1 "*) echo "电信"; return ;; esac
+    case " $UNICOM_TAGS " in *" $1 "*) echo "联通"; return ;; esac
+    case " $MOBILE_TAGS " in *" $1 "*) echo "移动"; return ;; esac
+}
 
 declare -A LINE_ASN_MAP
 LINE_ASN_MAP=(
@@ -608,6 +617,31 @@ get_overseas_tag() {
 }
 
 
+trace_last_isp() {
+    local raw_data="$1"
+    local last_isp=""
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+
+        local ip tag asn isp
+        ip=$(echo "$line" | extract_ipv4)
+        [ -n "$ip" ] && tag=$(identify_cn_tag "$ip")
+
+        if [ -z "$tag" ]; then
+            asn=$(echo "$line" | extract_asn)
+            [ -n "$asn" ] && tag=$(identify_asn_tag "$asn")
+        fi
+
+        if is_line_tag "$tag"; then
+            isp=$(line_tag_isp "$tag")
+            [ -n "$isp" ] && last_isp="$isp"
+        fi
+    done <<< "$raw_data"
+
+    echo "$last_isp"
+}
+
 trace_has_tag() {
     local raw_data="$1"
     local target_tag="$2"
@@ -639,6 +673,10 @@ analyze_line_type() {
     local latency="${3:-}"
     local target_name="${4:-}"
     local result="未识别"
+
+    local effective_isp
+    effective_isp=$(trace_last_isp "$raw_data")
+    [ -n "$effective_isp" ] && isp_type="$effective_isp"
 
     case "$isp_type" in
     "电信")
